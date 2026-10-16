@@ -1,0 +1,67 @@
+# Salin ke config/rules.yaml lalu sesuaikan dengan bisnis Anda.
+# Placeholder di template balasan: {username} {text} {permalink} {query} {source}
+
+leads:
+  # Query keyword search. Bisa string biasa atau objek dengan opsi.
+  queries:
+    - "butuh vendor IT"
+    - "rekomendasi jasa cloud"
+    - "cari konsultan IT"
+    - q: "datacenter"
+      search_mode: TAG          # cari berdasarkan topic tag
+      search_type: RECENT       # RECENT | TOP
+      limit: 25
+
+  # Keyword -> bobot skor. Post hasil search disimpan sebagai lead kalau skor >= min_score.
+  include:
+    butuh: 1
+    cari: 1
+    rekomendasi: 1.5
+    vendor: 2
+    jasa: 1
+    cloud: 1.5
+    server: 1
+    "data center": 2
+    budget: 2
+    penawaran: 2
+    quotation: 2
+  # Post yang mengandung kata ini selalu dibuang.
+  exclude:
+    - lowongan
+    - loker
+    - giveaway
+    - promo
+  min_score: 2.5
+
+  crawl_mentions: true          # mention @akun Anda selalu jadi lead
+  crawl_own_replies: true       # balasan di post Anda selalu jadi lead
+  own_posts_lookback: 10        # berapa post terakhir Anda yang dicek balasannya
+
+responder:
+  max_replies_per_run: 10       # batas balasan publik per sekali jalan
+  reply_delay_seconds: 20       # jeda antar balasan (diberi jitter acak)
+
+  # Rule dicek berurutan, rule pertama yang cocok dipakai.
+  # sources: mention | reply | search | "*"
+  # match_any kosong = cocok semua.
+  rules:
+    - name: spam
+      sources: [reply]
+      match_any: [judi, slot, "gacor"]
+      hide: true                # sembunyikan reply spam di post Anda
+
+    - name: tanya-harga
+      sources: [mention, reply]
+      match_any: [harga, price, biaya, pricelist, quotation, penawaran]
+      reply: "Halo @{username}, terima kasih sudah bertanya! Detail harga kami kirim lewat DM ya 🙏"
+      dm: "Halo {username}, terkait pertanyaan Anda di Threads ({permalink}): boleh dibantu info kebutuhan & kontak yang bisa kami hubungi?"
+
+    - name: lead-dari-search
+      sources: [search]
+      # Lead hasil search tidak dibalas publik (hindari terlihat spam),
+      # cukup masuk antrean DM untuk di-follow-up manual / oleh pipeline.
+      dm: "Halo {username}, kami lihat Anda sedang mencari \"{query}\". Kami bisa bantu, boleh ngobrol sebentar?"
+
+    - name: terima-kasih-mention
+      sources: [mention]
+      reply: "Terima kasih sudah mention kami, @{username}! 🙌"
