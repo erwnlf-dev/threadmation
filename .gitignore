@@ -8,3 +8,4 @@ venv/
 .pytest_cache/
 exports/
 config/rules.yaml
+node_modules/

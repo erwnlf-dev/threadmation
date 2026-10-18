@@ -40,6 +40,8 @@ class Settings:
     event_webhook_url: str = ""
     api_base: str = DEFAULT_BASE_URL
     webhook_auto_reply: bool = False
+    social_bridge_dir: str = ""
+    crosspost: list[str] = field(default_factory=list)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -56,6 +58,8 @@ class Settings:
             event_webhook_url=e("THREADMATION_EVENT_WEBHOOK_URL", ""),
             api_base=e("THREADS_API_BASE", DEFAULT_BASE_URL) or DEFAULT_BASE_URL,
             webhook_auto_reply=e("THREADMATION_WEBHOOK_AUTO_REPLY", "").lower() in ("1", "true", "yes"),
+            social_bridge_dir=e("THREADMATION_SOCIAL_BRIDGE", ""),
+            crosspost=[x.strip() for x in e("THREADMATION_CROSSPOST", "").split(",") if x.strip()],
         )
 
 

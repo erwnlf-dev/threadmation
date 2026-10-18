@@ -41,10 +41,11 @@ def cmd_post(args):
         "quote_post_id": args.quote,
     }
     opts = {k: v for k, v in opts.items() if v}
+    crosspost = [] if args.no_crosspost else args.also
     if args.dry_run:
-        _print({"dry_run": True, "text": text, **opts})
+        _print({"dry_run": True, "text": text, **opts, "crosspost": crosspost or b.settings.crosspost})
         return
-    _print(b.post(text=text, **opts))
+    _print(b.post(text=text, crosspost=crosspost, **opts))
 
 
 def cmd_reply(args):
@@ -155,6 +156,33 @@ def cmd_outbox(args):
         print(f"{len(args.ids)} item ditandai {status}")
 
 
+def cmd_social(args):
+    from .social import SocialBridgeError
+
+    b = _bot()
+    try:
+        if args.action == "platforms":
+            _print({"configured": b.social.platforms(), "default_crosspost": b.settings.crosspost})
+            return
+        if not args.text:
+            sys.exit("Isi teks: threadmation social post \"teks\" --to x bluesky")
+        text = sys.stdin.read().strip() if args.text == "-" else args.text
+        targets = args.to or b.settings.crosspost
+        if not targets:
+            sys.exit("Sebutkan platform: --to x bluesky linkedin (atau isi THREADMATION_CROSSPOST)")
+        media = [{"kind": "image", "url": u} for u in args.image or []]
+        if args.video:
+            media.append({"kind": "video", "url": args.video})
+        if args.dry_run:
+            _print({"dry_run": True, "platforms": targets, "text": text, "media": media, "link": args.link})
+            return
+        result = b.social.publish(targets, text, media=media, link=args.link)
+        b.notifier.emit("social.published", {"text": text, **result})
+        _print(result)
+    except SocialBridgeError as exc:
+        sys.exit(f"social-sdk: {exc}")
+
+
 def cmd_quota(args):
     _print(_bot().client.publishing_limit())
 
@@ -198,6 +226,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--topic-tag")
     s.add_argument("--link", help="link attachment (post teks)")
     s.add_argument("--quote", help="media id post yang di-quote")
+    s.add_argument("--also", nargs="+", metavar="PLATFORM", help="cross-post via social-sdk (x, bluesky, linkedin)")
+    s.add_argument("--no-crosspost", action="store_true", help="abaikan THREADMATION_CROSSPOST untuk post ini")
     s.add_argument("--dry-run", action="store_true")
     s.set_defaults(fn=cmd_post)
 
@@ -264,6 +294,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--status", default="pending")
     s.add_argument("--file", default="outbox.csv")
     s.set_defaults(fn=cmd_outbox)
+
+    s = sub.add_parser("social", help="post ke X/Bluesky/LinkedIn via social-sdk (tanpa Threads)")
+    s.add_argument("action", choices=["platforms", "post"])
+    s.add_argument("text", nargs="?", help="isi post (pakai '-' untuk baca dari stdin)")
+    s.add_argument("--to", nargs="+", metavar="PLATFORM")
+    s.add_argument("--image", nargs="+", metavar="IMAGE_URL")
+    s.add_argument("--video", metavar="VIDEO_URL")
+    s.add_argument("--link")
+    s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(fn=cmd_social)
 
     sub.add_parser("quota", help="sisa kuota post & reply 24 jam").set_defaults(fn=cmd_quota)
     sub.add_parser("refresh-token", help="perpanjang long-lived token 60 hari").set_defaults(fn=cmd_refresh_token)

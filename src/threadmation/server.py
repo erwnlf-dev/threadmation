@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from .bot import Bot
 from .client import MAX_TEXT_LENGTH, ThreadsAPIError
+from .social import SocialBridgeError
 
 log = logging.getLogger(__name__)
 
@@ -37,12 +38,27 @@ class PostIn(BaseModel):
     link_attachment: str | None = None
     quote_post_id: str | None = None
     alt_text: str | None = None
+    crosspost: list[str] | None = None
 
 
 class ReplyIn(BaseModel):
     reply_to_id: str
     text: str = Field(..., min_length=1, max_length=MAX_TEXT_LENGTH)
     image_url: str | None = None
+
+
+class SocialMediaIn(BaseModel):
+    kind: Literal["image", "video"] = "image"
+    url: str
+    alt_text: str | None = None
+
+
+class SocialPostIn(BaseModel):
+    platforms: list[str] | None = None
+    text: str | None = None
+    media: list[SocialMediaIn] = []
+    link: str | None = None
+    idempotency_key: str | None = None
 
 
 class StatusIn(BaseModel):
@@ -81,6 +97,8 @@ def create_app(bot: Bot | None = None) -> FastAPI:
             raise HTTPException(502, {"error": str(exc), "threads": exc.payload}) from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+        except SocialBridgeError as exc:
+            raise HTTPException(503, f"social-sdk: {exc}") from exc
 
     @app.get("/healthz")
     def healthz():
@@ -94,6 +112,21 @@ def create_app(bot: Bot | None = None) -> FastAPI:
     @app.post("/v1/replies")
     def create_reply(body: ReplyIn, b: Bot = Depends(require_key)):
         return call(b.reply, body.reply_to_id, body.text, origin="api", image_url=body.image_url)
+
+    @app.get("/v1/social/platforms")
+    def social_platforms(b: Bot = Depends(require_key)):
+        return {"configured": call(b.social.platforms), "default_crosspost": b.settings.crosspost}
+
+    @app.post("/v1/social/posts")
+    def social_post(body: SocialPostIn, b: Bot = Depends(require_key)):
+        targets = body.platforms or b.settings.crosspost
+        if not targets:
+            raise HTTPException(422, "platforms kosong (atau isi THREADMATION_CROSSPOST)")
+        media = [m.model_dump(exclude_none=True) for m in body.media]
+        result = call(b.social.publish, targets, body.text, media=media, link=body.link,
+                      idempotency_key=body.idempotency_key)
+        b.notifier.emit("social.published", {"text": body.text, **result})
+        return result
 
     @app.delete("/v1/posts/{media_id}")
     def delete_post(media_id: str, b: Bot = Depends(require_key)):

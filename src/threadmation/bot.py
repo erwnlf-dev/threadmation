@@ -13,6 +13,7 @@ from .config import Rules, Settings
 from .leads import CrawlReport, LeadCrawler
 from .notify import Notifier
 from .responder import RespondReport, Responder
+from .social import SocialBridge, SocialBridgeError, media_from_post_kwargs
 from .store import Store, now_iso
 
 log = logging.getLogger(__name__)
@@ -35,10 +36,11 @@ class Bot:
         )
         self.crawler = LeadCrawler(self.client, self.store, self.rules, self.notifier)
         self.responder = Responder(self.client, self.store, self.rules, self.notifier)
+        self.social = SocialBridge(self.settings.social_bridge_dir or None)
         self._respond_lock = threading.Lock()
 
     # ------------------------------------------------------------ actions
-    def post(self, text: str | None = None, origin: str = "cli", **kwargs) -> dict:
+    def post(self, text: str | None = None, origin: str = "cli", crosspost: list[str] | None = None, **kwargs) -> dict:
         media_id = self.client.post(text=text, **kwargs)
         kind = "reply" if kwargs.get("reply_to_id") else "post"
         self.store.log_post(media_id, kind, text, reply_to=kwargs.get("reply_to_id"), origin=origin)
@@ -48,7 +50,27 @@ class Bot:
         except ThreadsAPIError:
             pass
         self.notifier.emit("post.published", info)
+        targets = self.settings.crosspost if crosspost is None else crosspost
+        if targets and kind == "post":
+            info["crosspost"] = self.crosspost(
+                targets, text, media=media_from_post_kwargs(kwargs),
+                link=kwargs.get("link_attachment"), idempotency_key=f"threads-{media_id}",
+            )
         return info
+
+    def crosspost(self, platforms: list[str], text: str | None, media: list[dict] | None = None,
+                  link: str | None = None, idempotency_key: str | None = None) -> dict:
+        """Publish ke platform lain via social-sdk. Gagal tidak melempar error (post Threads sudah terkirim)."""
+        try:
+            result = self.social.publish(platforms, text, media=media, link=link, idempotency_key=idempotency_key)
+        except SocialBridgeError as exc:
+            log.warning("Cross-post gagal: %s", exc)
+            return {"status": "failed", "error": str(exc), "results": []}
+        for r in result["results"]:
+            if r.get("state") not in ("published", "accepted", "processing"):
+                log.warning("Cross-post %s: %s", r.get("platform"), r)
+        self.notifier.emit("social.published", {"text": text, **result})
+        return result
 
     def reply(self, reply_to_id: str, text: str, origin: str = "cli", **kwargs) -> dict:
         return self.post(text=text, reply_to_id=reply_to_id, origin=origin, **kwargs)

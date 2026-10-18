@@ -8,6 +8,7 @@ Bot untuk akun **Threads** (Meta) yang bisa:
 | **Reply** | Balas post/reply mana pun, plus auto-reply berbasis rules untuk mention dan balasan di post Anda. Reply spam bisa otomatis di-hide. |
 | **Crawl leads** | Keyword/tag search post publik + mention + balasan di post Anda, diberi skor dari keyword, lalu disimpan di SQLite (tanpa duplikat). |
 | **DM** | ⚠️ Threads API **tidak menyediakan endpoint DM**. Bot membuat **outbox DM** berisi pesan siap kirim + link profil. Kirim manual, ekspor CSV, atau teruskan ke pipeline Anda lewat event webhook. |
+| **Cross-post** | Post yang sama ikut terbit di **X, Bluesky, LinkedIn** lewat [`@opencoredev/social-sdk`](https://github.com/opencoredev/social-sdk). |
 | **Integrasi pipeline** | HTTP API (`/v1/posts`, `/v1/replies`, `/v1/leads`, ...) dan event webhook keluar (`lead.created`, `dm.queued`, `post.published`, `reply.published`). |
 
 ## 1. Setup
@@ -89,7 +90,31 @@ threadmation quota                           # sisa kuota 250 post / 1000 reply 
 
 Untuk cron cukup: `*/15 * * * * cd /path/threadmation && .venv/bin/threadmation run --once --live`
 
-## 3. Rules (`config/rules.yaml`)
+## 3. Cross-post ke X / Bluesky / LinkedIn (social-sdk)
+
+[`@opencoredev/social-sdk`](https://github.com/opencoredev/social-sdk) adalah SDK TypeScript, jadi dipasang
+sebagai bridge Node kecil di `social-bridge/` yang dipanggil otomatis oleh bot Python. Threads tetap
+diposting oleh client Python bawaan; SDK dipakai untuk platform lainnya.
+
+```bash
+# sekali saja (butuh Node.js >= 22.12)
+cd social-bridge && npm install && cd ..
+
+# isi kredensial SOCIAL_X_* / SOCIAL_BLUESKY_* / SOCIAL_LINKEDIN_* di .env, lalu cek:
+threadmation social platforms
+
+threadmation post "Rilis v2.3 sudah live!" --also x bluesky   # Threads + cross-post
+threadmation social post "Hanya ke X & LinkedIn" --to x linkedin --image https://contoh.com/a.jpg
+SOCIAL_SDK_MOCK=1 threadmation social post "uji coba" --to mock  # backend tiruan, tanpa network
+```
+
+- `THREADMATION_CROSSPOST=x,bluesky` membuat **setiap post baru** (CLI, HTTP API, Python) otomatis
+  di-cross-post. Reply tidak pernah di-cross-post. Pakai `--no-crosspost` untuk melewati satu post.
+- Gagal cross-post tidak membatalkan post Threads; hasil per platform ada di field `crosspost`
+  (`state`: `published`, `failed`, `not-submitted` + `reason`/`message`) dan event `social.published`.
+- Batas tiap platform berlaku (mis. X 280 karakter) dan divalidasi oleh SDK.
+
+## 4. Rules (`config/rules.yaml`)
 
 - `leads.queries` — keyword/tag yang dicari.
 - `leads.include` — keyword → bobot skor; post hasil search disimpan jika skor ≥ `min_score`.
@@ -104,7 +129,7 @@ secara massal berisiko dianggap spam oleh Meta dan bisa membuat akun dibatasi.
 Pengaman bawaan: dry-run default, tidak pernah membalas post yang sama dua kali, batas balasan per run,
 jeda acak antar balasan, cek kuota reply harian, dan publish tidak di-retry saat error 5xx (supaya tidak double-post).
 
-## 4. Integrasi pipeline
+## 5. Integrasi pipeline
 
 ### HTTP API
 
@@ -116,7 +141,9 @@ Semua endpoint `/v1/*` butuh header `X-API-Key: $THREADMATION_API_KEY`.
 
 | Method | Endpoint | Body / query |
 |---|---|---|
-| POST | `/v1/posts` | `{"text", "image_url", "video_url", "carousel":[{"image_url"}], "topic_tag", "link_attachment", "reply_control", "quote_post_id"}` |
+| POST | `/v1/posts` | `{"text", "image_url", "video_url", "carousel":[{"image_url"}], "topic_tag", "link_attachment", "reply_control", "quote_post_id", "crosspost":["x","bluesky"]}` |
+| POST | `/v1/social/posts` | `{"platforms":["x","linkedin"], "text", "media":[{"kind":"image","url"}], "link"}` (tanpa Threads) |
+| GET | `/v1/social/platforms` | platform social-sdk yang sudah dikonfigurasi |
 | POST | `/v1/replies` | `{"reply_to_id", "text"}` |
 | DELETE | `/v1/posts/{id}` | |
 | POST | `/v1/replies/{id}/hide?hide=true` | |
@@ -157,7 +184,7 @@ Isi `THREADMATION_EVENT_WEBHOOK_URL` (n8n, Make, Zapier, CRM, atau service Anda)
           "message": "Halo budi, ...", "lead_text": "...", "permalink": "..."}}
 ```
 
-Event: `lead.created`, `dm.queued`, `reply.published`, `post.published`.
+Event: `lead.created`, `dm.queued`, `reply.published`, `post.published`, `social.published`.
 
 ### Webhook masuk dari Meta (real-time mention & reply)
 
@@ -167,7 +194,7 @@ Event: `lead.created`, `dm.queued`, `reply.published`, `post.published`.
 3. Isi `THREADS_APP_SECRET` agar signature `X-Hub-Signature-256` diverifikasi.
 4. `THREADMATION_WEBHOOK_AUTO_REPLY=true` jika ingin auto-reply langsung saat event masuk.
 
-## 5. Development
+## 6. Development
 
 ```bash
 pip install -e ".[dev]"
@@ -175,4 +202,7 @@ pytest
 ```
 
 Struktur: `client.py` (wrapper Graph API) · `leads.py` (crawler + scoring) · `responder.py` (auto-reply/DM outbox) ·
-`store.py` (SQLite) · `bot.py` (wiring + token + webhook) · `server.py` (FastAPI) · `cli.py`.
+`store.py` (SQLite) · `bot.py` (wiring + token + webhook) · `server.py` (FastAPI) · `cli.py` ·
+`social.py` + `social-bridge/bridge.mjs` (cross-post via social-sdk).
+
+Test bridge sungguhan (backend mock SDK) ikut jalan kalau `social-bridge/node_modules` ada.
