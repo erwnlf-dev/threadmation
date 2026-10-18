@@ -86,13 +86,13 @@ class Responder:
                     self.store.mark_handled(lead["id"])
                 continue
 
-            if rule.reply and replies_left <= 0 and not dry_run:
+            # Balas/hide publik hanya untuk Threads; lead platform lain cukup masuk outbox DM.
+            on_threads = (lead.get("platform") or "threads") == "threads"
+            if rule.reply and on_threads and replies_left <= 0 and not dry_run:
                 report.stopped_reason = "batas balasan per run / kuota balasan harian tercapai"
                 break
 
             status = None
-            # Balas/hide publik hanya untuk Threads; lead platform lain cukup masuk outbox DM.
-            on_threads = (lead.get("platform") or "threads") == "threads"
             if rule.hide and on_threads and lead.get("source") == "reply":
                 if self._do(report, lead, rule, "hide", "hide reply", dry_run, self._hide):
                     status = "hidden"
@@ -155,6 +155,8 @@ class Responder:
             )
 
     def _reply_quota_left(self) -> int:
+        if not self.client.access_token:
+            return 0  # Threads nonaktif: tidak ada balasan publik
         try:
             info = self.client.publishing_limit()
             total = (info.get("reply_config") or {}).get("quota_total", 1000)

@@ -137,6 +137,8 @@ leads:
     mid_bonus: 1               # bonus untuk builder aktif berukuran sedang
 ```
 
+- **Mode X saja:** kosongkan `THREADS_ACCESS_TOKEN`. Search Threads, mention, balasan, dan refresh token
+  dilewati otomatis; perintah khusus Threads (`whoami`, `post`, ...) memberi pesan bahwa token belum diisi.
 - Lead dari X diberi id `x_<id>`, kolom `platform`, dan profil penulis (`author`: nama, bio, follower).
 - Profil Threads diambil lewat `profile_lookup` (scope `threads_profile_discovery`); tanpa scope itu
   crawl tetap jalan tanpa skor profil.

@@ -39,6 +39,10 @@ class Bot:
         self.responder = Responder(self.client, self.store, self.rules, self.notifier)
         self._respond_lock = threading.Lock()
 
+    @property
+    def threads_enabled(self) -> bool:
+        return bool(self.client.access_token)
+
     # ------------------------------------------------------------ actions
     def post(self, text: str | None = None, origin: str = "cli", crosspost: list[str] | None = None, **kwargs) -> dict:
         media_id = self.client.post(text=text, **kwargs)
@@ -85,7 +89,7 @@ class Bot:
 
     def cycle(self, dry_run: bool = True) -> tuple[CrawlReport, RespondReport]:
         """Satu putaran penuh: refresh token bila perlu -> crawl -> respond."""
-        if not dry_run:
+        if not dry_run and self.threads_enabled:
             self.maybe_refresh_token()
         return self.crawl(), self.respond(dry_run=dry_run)
 
@@ -111,7 +115,7 @@ class Bot:
         """Pakai token hasil refresh (di DB) selama token di .env belum diganti."""
         env_token = self.settings.access_token
         if not env_token:
-            raise ValueError("THREADS_ACCESS_TOKEN belum diisi (lihat .env.example)")
+            return ""  # Threads nonaktif: bot tetap bisa crawl X & cross-post
         stored = self.store.get("access_token")
         if stored and self.store.get("access_token_origin") == _sha(env_token):
             return stored

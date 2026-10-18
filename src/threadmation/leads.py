@@ -83,6 +83,9 @@ class LeadCrawler:
         report = CrawlReport()
         mentions = self.rules.crawl_mentions if mentions is None else mentions
         replies = self.rules.crawl_own_replies if replies is None else replies
+        if not self.threads_enabled:
+            # Tanpa token Threads: mention & balasan Threads dilewati, search hanya platform lain.
+            mentions = replies = False
         if search:
             self._guard(report, "search", self.crawl_search, report)
         if mentions:
@@ -125,6 +128,8 @@ class LeadCrawler:
     def crawl_search(self, report: CrawlReport) -> None:
         for q in self.rules.queries:
             for platform in q.get("platforms", self.rules.platforms):
+                if platform == "threads" and not self.threads_enabled:
+                    continue
                 try:
                     results = self._search(platform, q)
                 except (ThreadsAPIError, SocialBridgeError) as exc:
@@ -155,6 +160,10 @@ class LeadCrawler:
             query = q.get("x_query") or f"{q['q']} -is:retweet"
             return self.social.search("x", query, limit=limit)
         raise SocialBridgeError(f"platform search tidak dikenal: {platform}")
+
+    @property
+    def threads_enabled(self) -> bool:
+        return bool(self.client.access_token)
 
     def _worth_enriching(self, post: dict) -> bool:
         """Lewati post yang sudah tersimpan atau kena exclude, supaya tidak boros panggilan profil."""

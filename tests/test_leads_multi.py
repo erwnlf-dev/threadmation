@@ -154,3 +154,15 @@ def test_old_database_is_migrated(tmp_path):
     assert store.add_lead(x_post(9, "a", "t", "b", 1), "search")
     assert store.get_lead("x_9")["author"]["bio"] == "b"
     assert store.queue_dm("a", "hi", lead_id="x_9", platform="x")
+
+
+def test_x_only_mode_without_threads_token(multi, session):
+    multi.client.access_token = ""
+    multi.rules.responses = multi.responder.rules.responses = [
+        ResponseRule(name="semua", sources=["search", "mention"], reply="hai", dm="Hi {first_name}"),
+    ]
+    report = multi.cycle(dry_run=False)[0]
+    assert report.errors == []
+    assert {l["platform"] for l in multi.store.list_leads()} == {"x"}
+    assert session.calls == []  # tidak ada satu pun panggilan ke Threads API
+    assert [(o["platform"], o["username"]) for o in multi.store.list_outbox()] == [("x", "dev_andi")]

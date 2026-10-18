@@ -60,8 +60,7 @@ class ThreadsClient:
         publish_timeout: float = 300.0,
         sleep=time.sleep,
     ):
-        if not access_token:
-            raise ValueError("access_token wajib diisi (THREADS_ACCESS_TOKEN)")
+        # Token boleh kosong (mode X saja); setiap panggilan Threads lalu gagal dengan pesan jelas.
         self.access_token = access_token
         self._user_id = user_id or None
         self.base_url = base_url.rstrip("/")
@@ -75,6 +74,8 @@ class ThreadsClient:
 
     # ------------------------------------------------------------------ core
     def request(self, method: str, path: str, params: dict | None = None) -> dict:
+        if not self.access_token:
+            raise ThreadsAPIError("THREADS_ACCESS_TOKEN belum diisi (lihat .env.example)")
         url = path if path.startswith("http") else f"{self.base_url}/{path.lstrip('/')}"
         params = {k: v for k, v in (params or {}).items() if v is not None}
         params.setdefault("access_token", self.access_token)
