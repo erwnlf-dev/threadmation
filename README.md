@@ -6,7 +6,7 @@ Bot untuk akun **Threads** (Meta) yang bisa:
 |---|---|
 | **Update / posting** | Teks, gambar, video, carousel, topic tag, link attachment, quote post. Bisa dipanggil dari CLI, HTTP API, atau kode Python. |
 | **Reply** | Balas post/reply mana pun, plus auto-reply berbasis rules untuk mention dan balasan di post Anda. Reply spam bisa otomatis di-hide. |
-| **Crawl leads** | Keyword/tag search post publik + mention + balasan di post Anda, diberi skor dari keyword, lalu disimpan di SQLite (tanpa duplikat). |
+| **Crawl leads** | Keyword/tag search post publik di **Threads & X** + mention + balasan di post Anda. Skor dari isi post **dan profil penulis** (bio, ukuran akun), disimpan di SQLite (tanpa duplikat), bisa dilihat per orang. |
 | **DM** | ⚠️ Threads API **tidak menyediakan endpoint DM**. Bot membuat **outbox DM** berisi pesan siap kirim + link profil. Kirim manual, ekspor CSV, atau teruskan ke pipeline Anda lewat event webhook. |
 | **Cross-post** | Post yang sama ikut terbit di **X, Bluesky, LinkedIn** lewat [`@opencoredev/social-sdk`](https://github.com/opencoredev/social-sdk). |
 | **Integrasi pipeline** | HTTP API (`/v1/posts`, `/v1/replies`, `/v1/leads`, ...) dan event webhook keluar (`lead.created`, `dm.queued`, `post.published`, `reply.published`). |
@@ -69,8 +69,10 @@ threadmation mentions
 
 # Leads
 threadmation search "butuh vendor IT" --type RECENT
-threadmation crawl                           # search + mention + reply sesuai rules
-threadmation leads --status new
+threadmation crawl                           # search (Threads + X) + mention + reply sesuai rules
+threadmation people --min-posts 2            # per orang, paling relevan di atas
+threadmation people --csv people.csv
+threadmation leads --status new --platform x
 threadmation leads --csv leads.csv
 threadmation leads --set-status <LEAD_ID> contacted
 
@@ -114,14 +116,46 @@ SOCIAL_SDK_MOCK=1 threadmation social post "uji coba" --to mock  # backend tirua
   (`state`: `published`, `failed`, `not-submitted` + `reason`/`message`) dan event `social.published`.
 - Batas tiap platform berlaku (mis. X 280 karakter) dan divalidasi oleh SDK.
 
-## 4. Rules (`config/rules.yaml`)
+## 4. Crawl leads di Threads & X (lebih dari sekadar centang biru)
+
+Isi `SOCIAL_X_BEARER_TOKEN` di `.env` (search X hanya 7 hari terakhir, butuh paket X API berbayar),
+lalu di rules:
+
+```yaml
+leads:
+  platforms: [threads, x]
+  queries:
+    - "Claude for Startups"
+    - q: "built with Claude"
+      x_query: '"built with Claude" -is:retweet -is:reply'   # operator X API, opsional
+  profile:                     # skor dari PROFIL penulis, bukan cuma isi post
+    include: {founder: 2, cto: 1.5, building: 1.5}
+    exclude: [crypto, promo]
+    min_followers: 30          # buang akun kosong/bot
+    max_followers: 100000      # buang influencer/brand besar
+    mid_followers: [200, 20000]
+    mid_bonus: 1               # bonus untuk builder aktif berukuran sedang
+```
+
+- Lead dari X diberi id `x_<id>`, kolom `platform`, dan profil penulis (`author`: nama, bio, follower).
+- Profil Threads diambil lewat `profile_lookup` (scope `threads_profile_discovery`); tanpa scope itu
+  crawl tetap jalan tanpa skor profil.
+- Centang biru **tidak** menambah skor. Orang yang berkali-kali membahas topik Anda naik ke atas di
+  `threadmation people`.
+- Lead X tidak pernah dibalas publik otomatis; aturan `dm` memasukkannya ke outbox dengan link profil X.
+  Satu orang hanya dapat satu DM per platform. Rule bisa dibatasi per platform (`platforms: [x]`).
+- Contoh lengkap untuk mencari builder Claude (Claude for Startups / API credits):
+  `config/rules.claude-builders.example.yaml`.
+
+## 5. Rules (`config/rules.yaml`)
 
 - `leads.queries` — keyword/tag yang dicari.
 - `leads.include` — keyword → bobot skor; post hasil search disimpan jika skor ≥ `min_score`.
 - `leads.exclude` — kata yang membuat post dibuang (mis. `loker`, `giveaway`).
 - Mention dan balasan di post Anda selalu disimpan sebagai lead (kecuali kena `exclude`).
 - `responder.rules` — dicek berurutan, rule pertama yang cocok dipakai. Aksi: `reply` (balasan publik),
-  `dm` (masuk outbox), `hide` (sembunyikan reply). Placeholder: `{username} {text} {permalink} {query} {source}`.
+  `dm` (masuk outbox), `hide` (sembunyikan reply). Placeholder: `{username} {name} {first_name} {bio} {text} {permalink} {query} {source} {platform}`.
+  Opsional `platforms: [x]` untuk membatasi rule ke platform tertentu.
 
 Default contoh: lead dari **search tidak dibalas publik**, hanya masuk outbox DM. Membalas orang asing
 secara massal berisiko dianggap spam oleh Meta dan bisa membuat akun dibatasi.
@@ -129,7 +163,7 @@ secara massal berisiko dianggap spam oleh Meta dan bisa membuat akun dibatasi.
 Pengaman bawaan: dry-run default, tidak pernah membalas post yang sama dua kali, batas balasan per run,
 jeda acak antar balasan, cek kuota reply harian, dan publish tidak di-retry saat error 5xx (supaya tidak double-post).
 
-## 5. Integrasi pipeline
+## 6. Integrasi pipeline
 
 ### HTTP API
 
@@ -149,7 +183,8 @@ Semua endpoint `/v1/*` butuh header `X-API-Key: $THREADMATION_API_KEY`.
 | POST | `/v1/replies/{id}/hide?hide=true` | |
 | GET | `/v1/search?q=...&search_type=RECENT` | |
 | POST | `/v1/crawl` | `{"search":true, "respond":true, "dry_run":false}` |
-| GET | `/v1/leads?status=new&source=search` | |
+| GET | `/v1/leads?status=new&source=search&platform=x` | |
+| GET | `/v1/people?platform=x&min_posts=2` | lead per orang, urut skor total |
 | PATCH | `/v1/leads/{id}` | `{"status":"contacted"}` |
 | GET | `/v1/outbox?status=pending` | |
 | PATCH | `/v1/outbox/{id}` | `{"status":"sent"}` |
@@ -194,7 +229,7 @@ Event: `lead.created`, `dm.queued`, `reply.published`, `post.published`, `social
 3. Isi `THREADS_APP_SECRET` agar signature `X-Hub-Signature-256` diverifikasi.
 4. `THREADMATION_WEBHOOK_AUTO_REPLY=true` jika ingin auto-reply langsung saat event masuk.
 
-## 6. Development
+## 7. Development
 
 ```bash
 pip install -e ".[dev]"
@@ -206,3 +241,4 @@ Struktur: `client.py` (wrapper Graph API) · `leads.py` (crawler + scoring) · `
 `social.py` + `social-bridge/bridge.mjs` (cross-post via social-sdk).
 
 Test bridge sungguhan (backend mock SDK) ikut jalan kalau `social-bridge/node_modules` ada.
+Test bridge Node: `cd social-bridge && npm test`.

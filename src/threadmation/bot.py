@@ -34,9 +34,9 @@ class Bot:
         self.client = client or ThreadsClient(
             self._resolve_token(), user_id=self.settings.user_id or None, base_url=self.settings.api_base
         )
-        self.crawler = LeadCrawler(self.client, self.store, self.rules, self.notifier)
-        self.responder = Responder(self.client, self.store, self.rules, self.notifier)
         self.social = SocialBridge(self.settings.social_bridge_dir or None)
+        self.crawler = LeadCrawler(self.client, self.store, self.rules, self.notifier, social=self.social)
+        self.responder = Responder(self.client, self.store, self.rules, self.notifier)
         self._respond_lock = threading.Lock()
 
     # ------------------------------------------------------------ actions

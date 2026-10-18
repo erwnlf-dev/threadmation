@@ -10,6 +10,7 @@ import sys
 import time
 
 from .client import ThreadsAPIError
+from .store import profile_url
 
 
 def _bot():
@@ -129,12 +130,27 @@ def cmd_leads(args):
             sys.exit(f"Lead {lead_id} tidak ditemukan")
         print("OK")
         return
-    rows = b.store.list_leads(status=args.status, source=args.source, limit=args.limit)
+    rows = b.store.list_leads(status=args.status, source=args.source, limit=args.limit, platform=args.platform)
     if args.csv:
         _write_csv(args.csv, rows)
         print(f"{len(rows)} lead diekspor ke {args.csv}")
     else:
         _print(rows)
+
+
+def cmd_people(args):
+    rows = _bot().store.list_people(platform=args.platform, min_posts=args.min_posts, limit=args.limit)
+    if args.csv:
+        _write_csv(args.csv, rows)
+        print(f"{len(rows)} orang diekspor ke {args.csv}")
+        return
+    for i, p in enumerate(rows, 1):
+        followers = f"{p['followers']:,} follower" if isinstance(p["followers"], int) else "follower ?"
+        print(f"{i:>3}. [{p['platform']}] @{p['username']} ({p['name'] or '-'}) · skor {p['total_score']} "
+              f"dari {p['posts']} post · {followers}")
+        if p["bio"]:
+            print(f"       bio: {p['bio'][:140]!r}")
+        print(f"       {p['profile_url']}  ·  post terbaik: {p['best_post']}")
 
 
 def cmd_outbox(args):
@@ -144,7 +160,7 @@ def cmd_outbox(args):
     elif args.action == "export":
         rows = b.store.list_outbox(status=args.status or None)
         for r in rows:
-            r["profile_url"] = f"https://www.threads.com/@{r['username']}"
+            r["profile_url"] = profile_url(r.get("platform"), r["username"])
         _write_csv(args.file, rows)
         print(f"{len(rows)} item diekspor ke {args.file}")
     elif args.action in ("sent", "skip"):
@@ -211,7 +227,7 @@ def _write_csv(path: str, rows: list[dict]) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="threadmation", description="Bot Threads: post, reply, crawl leads, outbox DM.")
+    p = argparse.ArgumentParser(prog="threadmation", description="Bot Threads: post, reply, crawl leads (Threads & X), outbox DM.")
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -283,10 +299,18 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("leads", help="lihat/ekspor/update lead")
     s.add_argument("--status")
     s.add_argument("--source", choices=["search", "mention", "reply"])
+    s.add_argument("--platform", choices=["threads", "x"])
     s.add_argument("--limit", type=int, default=100)
     s.add_argument("--csv", metavar="FILE")
     s.add_argument("--set-status", nargs=2, metavar=("LEAD_ID", "STATUS"))
     s.set_defaults(fn=cmd_leads)
+
+    s = sub.add_parser("people", help="lead dikelompokkan per orang, diurutkan dari yang paling relevan")
+    s.add_argument("--platform", choices=["threads", "x"])
+    s.add_argument("--min-posts", type=int, default=1, help="hanya orang dengan >= N post relevan")
+    s.add_argument("--limit", type=int, default=50)
+    s.add_argument("--csv", metavar="FILE")
+    s.set_defaults(fn=cmd_people)
 
     s = sub.add_parser("outbox", help="antrean DM (kirim manual / via pipeline)")
     s.add_argument("action", choices=["list", "export", "sent", "skip"])

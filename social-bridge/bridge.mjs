@@ -3,6 +3,7 @@
 //
 //   node bridge.mjs platforms            -> {"platforms": ["x", "bluesky", ...]}
 //   echo '{...}' | node bridge.mjs publish
+//   echo '{"platform": "x", "query": "Claude for Startups", "limit": 50}' | node bridge.mjs search
 //
 // Input publish (stdin JSON):
 //   {"platforms": ["x", "bluesky"], "text": "...", "media": [{"kind": "image", "url": "https://..."}],
@@ -13,6 +14,8 @@ import { connectedAccountRef, createSocial } from "@opencoredev/social-sdk";
 import { bluesky } from "@opencoredev/social-sdk/bluesky";
 import { linkedin } from "@opencoredev/social-sdk/linkedin";
 import { x } from "@opencoredev/social-sdk/x";
+import { randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 
 const env = process.env;
 
@@ -133,6 +136,64 @@ async function publish(input) {
   return { status, results };
 }
 
+// Cari post X (7 hari terakhir) beserta profil penulisnya, dalam format post threadmation.
+// Cukup SOCIAL_X_BEARER_TOKEN (app-only) atau user token SOCIAL_X_ACCESS_TOKEN.
+export async function search(input, fetchImpl = undefined) {
+  if (input.platform !== "x") throw new Error(`search belum didukung untuk platform: ${input.platform}`);
+  if (!input.query) throw new Error("query wajib diisi");
+  const accessToken = env.SOCIAL_X_ACCESS_TOKEN || undefined;
+  const appBearerToken = env.SOCIAL_X_BEARER_TOKEN || undefined;
+  if (!accessToken && !appBearerToken) throw new Error("X belum dikonfigurasi: isi SOCIAL_X_BEARER_TOKEN");
+  const userId = env.SOCIAL_X_USER_ID || "app";
+  const adapter = x({ auth: { userId, accessToken }, appBearerToken, ...(fetchImpl ? { fetch: fetchImpl } : {}) });
+  const account = connectedAccountRef({ backend: "x", platform: "x", accountId: userId });
+
+  const limit = Math.max(1, Number(input.limit) || 25);
+  const items = [];
+  let cursor = input.cursor;
+  do {
+    const context = { backendInstance: "x", correlationId: randomUUID(), retryBudget: { maxAttempts: 1, maxElapsedMs: 30_000 } };
+    const page = await adapter.native.searchRecentPosts({
+      account,
+      context,
+      search: {
+        query: input.query,
+        limit: Math.min(100, Math.max(10, limit - items.length)),
+        ...(cursor ? { cursor } : {}),
+        sortOrder: input.sort || "recency",
+        expansions: ["author_id"],
+        userFields: ["username", "name", "description", "public_metrics", "created_at"],
+      },
+    });
+    const users = new Map((page.metadata?.includes?.users || []).map((u) => [u.id, u]));
+    for (const tweet of page.items) {
+      const user = users.get(tweet.author_id) || {};
+      const metrics = user.public_metrics || {};
+      items.push({
+        id: `x_${tweet.id}`,
+        platform: "x",
+        text: tweet.text,
+        username: user.username,
+        permalink: `https://x.com/${user.username || "i"}/status/${tweet.id}`,
+        timestamp: tweet.created_at,
+        lang: tweet.lang,
+        author: {
+          id: tweet.author_id,
+          name: user.name,
+          bio: user.description,
+          followers: metrics.followers_count,
+          following: metrics.following_count,
+          posts: metrics.tweet_count,
+          created_at: user.created_at,
+        },
+      });
+      if (items.length >= limit) break;
+    }
+    cursor = page.nextCursor;
+  } while (cursor && items.length < limit);
+  return { items, next_cursor: cursor || null };
+}
+
 async function readStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
@@ -144,10 +205,12 @@ async function main() {
   const action = process.argv[2];
   if (action === "platforms") return { platforms: enabledPlatforms(), supported: Object.keys(PLATFORMS) };
   if (action === "publish") return publish(await readStdin());
-  throw new Error(`aksi tidak dikenal: ${action ?? "(kosong)"} (pakai: platforms | publish)`);
+  if (action === "search") return search(await readStdin());
+  throw new Error(`aksi tidak dikenal: ${action ?? "(kosong)"} (pakai: platforms | publish | search)`);
 }
 
-main().then(
+// Hanya jalan sebagai CLI; saat di-import (test) cukup ekspor fungsi.
+if (import.meta.url === pathToFileURL(process.argv[1] || "").href) main().then(
   (out) => process.stdout.write(`${JSON.stringify(out)}\n`),
   (err) => {
     process.stdout.write(`${JSON.stringify({ error: String(err?.message || err) })}\n`);

@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS leads (
-    id          TEXT PRIMARY KEY,           -- media id post/reply di Threads
+    id          TEXT PRIMARY KEY,           -- media id Threads, atau "x_<id>" untuk X
+    platform    TEXT NOT NULL DEFAULT 'threads', -- threads | x
     source      TEXT NOT NULL,              -- search | mention | reply | webhook
     query       TEXT,
     username    TEXT,
@@ -18,6 +19,7 @@ CREATE TABLE IF NOT EXISTS leads (
     posted_at   TEXT,
     score       REAL DEFAULT 0,
     matched     TEXT,                       -- JSON list keyword yang cocok
+    author      TEXT,                       -- JSON profil penulis: name, bio, followers, ...
     status      TEXT NOT NULL DEFAULT 'new',-- new | replied | queued | skipped | contacted | won | lost
     raw         TEXT,
     handled_at  TEXT,                       -- diisi setelah diproses responder
@@ -38,6 +40,7 @@ CREATE TABLE IF NOT EXISTS posts (
 CREATE TABLE IF NOT EXISTS outbox (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     lead_id     TEXT,
+    platform    TEXT NOT NULL DEFAULT 'threads',
     username    TEXT NOT NULL,
     message     TEXT NOT NULL,
     status      TEXT NOT NULL DEFAULT 'pending', -- pending | sent | skipped
@@ -52,6 +55,21 @@ CREATE TABLE IF NOT EXISTS kv (
 );
 """
 
+# Kolom yang ditambahkan setelah rilis pertama (database lama di-upgrade otomatis).
+MIGRATIONS = {
+    "leads": {"platform": "TEXT NOT NULL DEFAULT 'threads'", "author": "TEXT"},
+    "outbox": {"platform": "TEXT NOT NULL DEFAULT 'threads'"},
+}
+
+PROFILE_URLS = {
+    "threads": "https://www.threads.com/@{}",
+    "x": "https://x.com/{}",
+}
+
+
+def profile_url(platform: str | None, username: str) -> str:
+    return PROFILE_URLS.get(platform or "threads", PROFILE_URLS["threads"]).format(username)
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -65,6 +83,12 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         with self._lock, self.conn:
             self.conn.executescript(SCHEMA)
+            for table, cols in MIGRATIONS.items():
+                have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+                for col, decl in cols.items():
+                    if col not in have:
+                        self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_leads_person ON leads(platform, username)")
 
     def _exec(self, sql: str, args: tuple = ()) -> sqlite3.Cursor:
         with self._lock, self.conn:
@@ -98,11 +122,12 @@ class Store:
         ts = now_iso()
         cur = self._exec(
             """INSERT OR IGNORE INTO leads
-               (id, source, query, username, text, permalink, posted_at, score, matched, raw,
-                created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+               (id, platform, source, query, username, text, permalink, posted_at, score, matched, author,
+                raw, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 post["id"],
+                post.get("platform") or "threads",
                 source,
                 query,
                 post.get("username"),
@@ -111,6 +136,7 @@ class Store:
                 post.get("timestamp"),
                 score,
                 json.dumps(matched or []),
+                json.dumps(post["author"], ensure_ascii=False) if post.get("author") else None,
                 json.dumps(post, ensure_ascii=False),
                 ts,
                 ts,
@@ -122,14 +148,14 @@ class Store:
         rows = self._all("SELECT * FROM leads WHERE id=?", (lead_id,))
         return _decode_lead(rows[0]) if rows else None
 
-    def list_leads(self, status: str | None = None, source: str | None = None, limit: int = 100) -> list[dict]:
+    def list_leads(
+        self, status: str | None = None, source: str | None = None, limit: int = 100, platform: str | None = None
+    ) -> list[dict]:
         sql, args = "SELECT * FROM leads WHERE 1=1", []
-        if status:
-            sql += " AND status=?"
-            args.append(status)
-        if source:
-            sql += " AND source=?"
-            args.append(source)
+        for col, val in (("status", status), ("source", source), ("platform", platform)):
+            if val:
+                sql += f" AND {col}=?"
+                args.append(val)
         sql += " ORDER BY created_at DESC LIMIT ?"
         args.append(limit)
         return [_decode_lead(r) for r in self._all(sql, tuple(args))]
@@ -158,6 +184,33 @@ class Store:
         )
         return cur.rowcount > 0
 
+    def list_people(self, platform: str | None = None, min_posts: int = 1, limit: int = 100) -> list[dict]:
+        """Satu baris per orang: makin sering & makin relevan dia membahas topik Anda, makin atas."""
+        sql = """SELECT platform, username, COUNT(*) AS posts, ROUND(SUM(score), 2) AS total_score,
+                        MAX(score) AS best_score, MAX(created_at) AS last_seen,
+                        GROUP_CONCAT(DISTINCT query) AS queries
+                 FROM leads WHERE username IS NOT NULL AND score >= 0"""
+        args: list = []
+        if platform:
+            sql += " AND platform=?"
+            args.append(platform)
+        sql += " GROUP BY platform, username HAVING COUNT(*) >= ? ORDER BY total_score DESC, posts DESC LIMIT ?"
+        args += [min_posts, limit]
+        people = self._all(sql, tuple(args))
+        for p in people:
+            latest = self._all(
+                """SELECT author, permalink, text FROM leads WHERE platform=? AND username=?
+                   ORDER BY score DESC, created_at DESC LIMIT 1""",
+                (p["platform"], p["username"]),
+            )[0]
+            author = json.loads(latest["author"] or "{}")
+            p.update(
+                name=author.get("name"), bio=author.get("bio"), followers=author.get("followers"),
+                profile_url=profile_url(p["platform"], p["username"]),
+                best_post=latest["permalink"], best_text=latest["text"],
+            )
+        return people
+
     # --------------------------------------------------------------- posts
     def log_post(self, media_id: str, kind: str, text: str | None, reply_to: str | None = None, origin: str = "cli") -> None:
         self._exec(
@@ -169,10 +222,13 @@ class Store:
         return bool(self._all("SELECT 1 FROM posts WHERE reply_to=? LIMIT 1", (media_id,)))
 
     # -------------------------------------------------------------- outbox
-    def queue_dm(self, username: str, message: str, lead_id: str | None = None) -> int | None:
+    def queue_dm(self, username: str, message: str, lead_id: str | None = None, platform: str = "threads") -> int | None:
+        """Antre DM. Satu orang hanya dapat satu DM per platform, walau punya beberapa post relevan."""
+        if self._all("SELECT 1 FROM outbox WHERE platform=? AND username=? LIMIT 1", (platform, username)):
+            return None
         cur = self._exec(
-            "INSERT OR IGNORE INTO outbox(lead_id,username,message,created_at) VALUES(?,?,?,?)",
-            (lead_id, username, message, now_iso()),
+            "INSERT OR IGNORE INTO outbox(lead_id,platform,username,message,created_at) VALUES(?,?,?,?,?)",
+            (lead_id, platform, username, message, now_iso()),
         )
         return cur.lastrowid if cur.rowcount else None
 
@@ -194,5 +250,6 @@ class Store:
 def _decode_lead(row: dict) -> dict:
     row = dict(row)
     row["matched"] = json.loads(row.get("matched") or "[]")
+    row["author"] = json.loads(row["author"]) if row.get("author") else None
     row.pop("raw", None)
     return row

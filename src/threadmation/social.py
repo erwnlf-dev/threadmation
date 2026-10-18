@@ -1,4 +1,4 @@
-"""Cross-post ke platform lain (X, Bluesky, LinkedIn) lewat @opencoredev/social-sdk.
+"""Cross-post (X, Bluesky, LinkedIn) dan search X lewat @opencoredev/social-sdk.
 
 SDK-nya TypeScript, jadi dipanggil lewat proses Node kecil di folder ``social-bridge/``
 (``npm install`` sekali di sana). Kredensial tiap platform dibaca bridge dari environment.
@@ -71,6 +71,10 @@ class SocialBridge:
         if idempotency_key:
             payload["idempotency_key"] = idempotency_key
         return self._call("publish", payload)
+
+    def search(self, platform: str, query: str, limit: int = 25, sort: str = "recency") -> list[dict]:
+        """Post hasil search (format sama dengan post Threads) + field ``platform`` dan ``author``."""
+        return self._call("search", {"platform": platform, "query": query, "limit": limit, "sort": sort})["items"]
 
 
 def media_from_post_kwargs(kwargs: dict) -> list[dict]:

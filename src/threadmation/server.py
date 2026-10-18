@@ -164,8 +164,23 @@ def create_app(bot: Bot | None = None) -> FastAPI:
         return out
 
     @app.get("/v1/leads")
-    def leads(status: str | None = None, source: str | None = None, limit: int = Query(100, le=1000), b: Bot = Depends(require_key)):
-        return {"data": b.store.list_leads(status=status, source=source, limit=limit)}
+    def leads(
+        status: str | None = None,
+        source: str | None = None,
+        platform: str | None = None,
+        limit: int = Query(100, le=1000),
+        b: Bot = Depends(require_key),
+    ):
+        return {"data": b.store.list_leads(status=status, source=source, limit=limit, platform=platform)}
+
+    @app.get("/v1/people")
+    def people(
+        platform: str | None = None,
+        min_posts: int = Query(1, ge=1),
+        limit: int = Query(100, le=1000),
+        b: Bot = Depends(require_key),
+    ):
+        return {"data": b.store.list_people(platform=platform, min_posts=min_posts, limit=limit)}
 
     @app.patch("/v1/leads/{lead_id}")
     def update_lead(lead_id: str, body: StatusIn, b: Bot = Depends(require_key)):

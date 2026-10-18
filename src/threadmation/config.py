@@ -68,13 +68,29 @@ class ResponseRule:
     name: str
     match_any: list[str] = field(default_factory=list)
     sources: list[str] = field(default_factory=lambda: ["mention", "reply"])
+    platforms: list[str] = field(default_factory=lambda: ["*"])
     reply: str | None = None
     dm: str | None = None
     hide: bool = False
 
 
 @dataclass
+class ProfileRules:
+    """Skor dari profil penulis (bio & ukuran akun), bukan cuma isi post."""
+
+    include: dict[str, float] = field(default_factory=dict)  # keyword bio -> bobot
+    exclude: list[str] = field(default_factory=list)  # bio dengan kata ini dibuang
+    min_followers: int = 0  # di bawah ini dibuang (akun bot/baru); 0 = tanpa batas
+    max_followers: int = 0  # di atas ini dibuang (influencer/brand besar); 0 = tanpa batas
+    mid_followers: tuple[int, int] = (0, 0)  # rentang "builder sungguhan" yang diberi bonus
+    mid_bonus: float = 0.0
+    enrich_threads: bool = True  # ambil profil Threads (butuh threads_profile_discovery)
+
+
+@dataclass
 class Rules:
+    platforms: list[str] = field(default_factory=lambda: ["threads"])
+    profile: ProfileRules = field(default_factory=ProfileRules)
     queries: list[dict] = field(default_factory=list)
     include: dict[str, float] = field(default_factory=dict)
     exclude: list[str] = field(default_factory=list)
@@ -101,7 +117,19 @@ class Rules:
         leads = raw.get("leads", {}) or {}
         responder = raw.get("responder", {}) or {}
         queries = [q if isinstance(q, dict) else {"q": str(q)} for q in leads.get("queries", [])]
+        prof = leads.get("profile", {}) or {}
+        profile = ProfileRules(
+            include={str(k).lower(): float(v) for k, v in (prof.get("include") or {}).items()},
+            exclude=[str(x).lower() for x in prof.get("exclude", [])],
+            min_followers=int(prof.get("min_followers", 0)),
+            max_followers=int(prof.get("max_followers", 0)),
+            mid_followers=tuple(int(x) for x in (prof.get("mid_followers") or (0, 0))),
+            mid_bonus=float(prof.get("mid_bonus", 0)),
+            enrich_threads=bool(prof.get("enrich_threads", True)),
+        )
         return cls(
+            platforms=[str(p).lower() for p in leads.get("platforms", ["threads"])],
+            profile=profile,
             queries=queries,
             include={str(k).lower(): float(v) for k, v in (leads.get("include") or {}).items()},
             exclude=[str(x).lower() for x in leads.get("exclude", [])],

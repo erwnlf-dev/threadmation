@@ -11,7 +11,7 @@ from .client import ThreadsAPIError, ThreadsClient
 from .config import ResponseRule, Rules
 from .leads import _contains
 from .notify import Notifier
-from .store import Store
+from .store import Store, profile_url
 
 log = logging.getLogger(__name__)
 
@@ -22,13 +22,18 @@ class _SafeDict(dict):
 
 
 def render(template: str, lead: dict) -> str:
-    return template.format_map(_SafeDict({k: (v if v is not None else "") for k, v in lead.items()})).strip()
+    author = lead.get("author") or {}
+    values = {**lead, "name": author.get("name") or lead.get("username"), "bio": author.get("bio")}
+    values["first_name"] = (values["name"] or "").split(" ")[0]
+    return template.format_map(_SafeDict({k: (v if v is not None else "") for k, v in values.items()})).strip()
 
 
 def match_rule(lead: dict, rules: list[ResponseRule]) -> ResponseRule | None:
     text = (lead.get("text") or "").lower()
     for rule in rules:
         if lead.get("source") not in rule.sources and "*" not in rule.sources:
+            continue
+        if (lead.get("platform") or "threads") not in rule.platforms and "*" not in rule.platforms:
             continue
         if not rule.match_any or any(_contains(text, kw.lower()) for kw in rule.match_any):
             return rule
@@ -86,10 +91,12 @@ class Responder:
                 break
 
             status = None
-            if rule.hide and lead.get("source") == "reply":
+            # Balas/hide publik hanya untuk Threads; lead platform lain cukup masuk outbox DM.
+            on_threads = (lead.get("platform") or "threads") == "threads"
+            if rule.hide and on_threads and lead.get("source") == "reply":
                 if self._do(report, lead, rule, "hide", "hide reply", dry_run, self._hide):
                     status = "hidden"
-            if rule.reply and not self.store.has_replied_to(lead["id"]):
+            if rule.reply and on_threads and not self.store.has_replied_to(lead["id"]):
                 text = render(rule.reply, lead)
                 if self._do(report, lead, rule, "reply", text, dry_run, self._reply):
                     status = "replied"
@@ -130,15 +137,17 @@ class Responder:
         self.client.hide_reply(lead["id"], True)
 
     def _queue_dm(self, lead: dict, text: str) -> None:
-        item_id = self.store.queue_dm(lead["username"], text, lead_id=lead["id"])
+        platform = lead.get("platform") or "threads"
+        item_id = self.store.queue_dm(lead["username"], text, lead_id=lead["id"], platform=platform)
         if item_id:
             self.notifier.emit(
                 "dm.queued",
                 {
                     "id": item_id,
                     "lead_id": lead["id"],
+                    "platform": platform,
                     "username": lead["username"],
-                    "profile_url": f"https://www.threads.com/@{lead['username']}",
+                    "profile_url": profile_url(platform, lead["username"]),
                     "message": text,
                     "lead_text": lead.get("text"),
                     "permalink": lead.get("permalink"),

@@ -2,6 +2,9 @@
 # Placeholder di template balasan: {username} {text} {permalink} {query} {source}
 
 leads:
+  # Platform yang dicari: threads, x (x butuh SOCIAL_X_BEARER_TOKEN). Bisa di-override per query.
+  platforms: [threads]
+
   # Query keyword search. Bisa string biasa atau objek dengan opsi.
   queries:
     - "butuh vendor IT"
@@ -32,6 +35,12 @@ leads:
     - giveaway
     - promo
   min_score: 2.5
+
+  # Opsional: skor dari profil penulis (bio & jumlah follower). Contoh lengkap:
+  # config/rules.claude-builders.example.yaml
+  # profile:
+  #   include: {founder: 2, cto: 1.5}
+  #   max_followers: 100000
 
   crawl_mentions: true          # mention @akun Anda selalu jadi lead
   crawl_own_replies: true       # balasan di post Anda selalu jadi lead

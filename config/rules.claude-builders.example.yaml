@@ -1,0 +1,101 @@
+# Contoh rules: cari orang yang membangun dengan Claude (Claude for Startups / API credits)
+# untuk MEMBANGUN RELASI, bukan jualan massal.
+#   cp config/rules.claude-builders.example.yaml config/rules.yaml
+#   threadmation crawl && threadmation people --min-posts 1
+# Placeholder template: {username} {name} {first_name} {bio} {text} {permalink} {query} {platform}
+
+leads:
+  # X butuh SOCIAL_X_BEARER_TOKEN (lihat .env.example). Threads keyword search butuh
+  # threads_keyword_search (Advanced Access) agar mencakup post semua orang.
+  platforms: [threads, x]
+  search_type: RECENT
+  results_per_query: 50
+
+  queries:
+    - "Claude for Startups"
+    - "Anthropic startup program"
+    - "Anthropic credits"
+    - "Claude API credits"
+    - "kredit Claude"
+    - "pakai Claude API"
+    - q: "built with Claude"
+      # Query khusus X (operator X API): hanya post asli, bukan reply.
+      x_query: '"built with Claude" -is:retweet -is:reply'
+    - q: "Claude Code"
+      platforms: [x]
+      x_query: '"Claude Code" (shipped OR launched OR building OR "our startup") -is:retweet'
+
+  # Skor dari ISI POST.
+  include:
+    claude for startups: 3
+    anthropic startup: 3
+    anthropic credits: 3
+    api credits: 2
+    kredit: 1.5
+    accepted: 1.5
+    diterima: 1.5
+    "we're building": 1.5
+    building: 1
+    shipped: 1.5
+    launched: 1.5
+    rilis: 1
+    startup: 1
+    founder: 1
+    claude api: 1.5
+    claude code: 1
+    github.com: 1
+  exclude: [giveaway, jual, dijual, murah, lowongan, loker, airdrop, "free credits", "dm me for"]
+
+  # Skor dari PROFIL PENULIS. Centang biru tidak menambah skor; yang dicari builder sungguhan.
+  profile:
+    include:
+      founder: 2
+      co-founder: 2
+      cofounder: 2
+      cto: 1.5
+      ceo: 1
+      building: 1.5
+      "ai engineer": 1.5
+      engineer: 1
+      developer: 1
+      indie: 1
+      hacker: 1
+      startup: 1
+      yc: 1
+      indonesia: 1
+      jakarta: 1
+    exclude: [crypto, nft, forex, "trading signal", promo]
+    min_followers: 30        # buang akun kosong/bot
+    max_followers: 100000    # buang influencer & brand besar (susah diajak ngobrol)
+    mid_followers: [200, 20000]
+    mid_bonus: 1             # sweet spot builder aktif
+    enrich_threads: true     # butuh threads_profile_discovery
+
+  min_score: 4               # skor post + skor profil
+  crawl_mentions: true
+  crawl_own_replies: true
+
+responder:
+  max_replies_per_run: 5
+  reply_delay_seconds: 30
+  rules:
+    # Lead hasil search TIDAK dibalas publik. Masuk outbox DM untuk dikirim manual,
+    # setelah Anda membaca profil & post-nya. Template ini titik awal, personalisasi sebelum kirim.
+    - name: relasi-x
+      sources: [search]
+      platforms: [x]
+      dm: >-
+        Hi {first_name}, saw your post about {query} ({permalink}). I'm also building with
+        Claude here in Indonesia and would love to swap notes on what's working for you.
+        No pitch, just connecting with fellow builders.
+
+    - name: relasi-threads
+      sources: [search]
+      platforms: [threads]
+      dm: >-
+        Halo {first_name}, saya lihat post kamu soal {query} ({permalink}). Saya juga lagi
+        membangun dengan Claude, pengin kenalan & tukar pengalaman sesama builder. Boleh ngobrol?
+
+    - name: terima-kasih-mention
+      sources: [mention]
+      reply: "Thanks for the mention, @{username}! 🙌"
